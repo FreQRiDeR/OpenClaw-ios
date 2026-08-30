@@ -69,50 +69,64 @@ struct AddAccountView: View {
                     .foregroundStyle(AppColors.neutral)
                     .multilineTextAlignment(.center)
             }
-                // Token
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text("BEARER TOKEN")
-                        .font(AppTypography.micro)
-                        .foregroundStyle(AppColors.neutral)
-                    SecureField("Paste token here\u{2026}", text: $tokenInput)
-                        #if os(iOS)
-                        .textContentType(.password)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .autocorrectionDisabled()
-                        .padding(Spacing.sm)
-                        .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
-                }
-                // Agent ID
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text("AGENT ID")
-                        .font(AppTypography.micro)
-                        .foregroundStyle(AppColors.neutral)
-                    TextField("orchestrator", text: $agentIdInput)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .autocorrectionDisabled()
-                        .padding(Spacing.sm)
-                        .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
-                }
-                // Workspace path (optional override)
-                VStack(alignment: .leading, spacing: Spacing.xxs) {
-                    Text("WORKSPACE PATH")
-                        .font(AppTypography.micro)
-                        .foregroundStyle(AppColors.neutral)
-                    TextField("auto (based on Agent ID)", text: $workspacePathInput)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        #endif
-                        .autocorrectionDisabled()
-                        .padding(Spacing.sm)
-                        .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
-                    Text("Leave empty for default. Set to ~/.openclaw/workspace/ for flat layouts.")
-                        .font(AppTypography.nano)
-                        .foregroundStyle(AppColors.neutral)
-                }
+            // Gateway URL
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text("GATEWAY URL")
+                    .font(AppTypography.micro)
+                    .foregroundStyle(AppColors.neutral)
+                TextField("https://your-gateway.example.com", text: $urlInput)
+                    #if os(iOS)
+                    .textContentType(.URL)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .autocorrectionDisabled()
+                    .padding(Spacing.sm)
+                    .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
+            }
+            // Token
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text("BEARER TOKEN")
+                    .font(AppTypography.micro)
+                    .foregroundStyle(AppColors.neutral)
+                SecureField("Paste token here…", text: $tokenInput)
+                    #if os(iOS)
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .autocorrectionDisabled()
+                    .padding(Spacing.sm)
+                    .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
+            }
+            // Agent ID
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text("AGENT ID")
+                    .font(AppTypography.micro)
+                    .foregroundStyle(AppColors.neutral)
+                TextField("orchestrator", text: $agentIdInput)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .autocorrectionDisabled()
+                    .padding(Spacing.sm)
+                    .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
+            }
+            // Workspace path (optional override)
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text("WORKSPACE PATH")
+                    .font(AppTypography.micro)
+                    .foregroundStyle(AppColors.neutral)
+                TextField("auto (based on Agent ID)", text: $workspacePathInput)
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+                    .autocorrectionDisabled()
+                    .padding(Spacing.sm)
+                    .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
+                Text("Leave empty for default. Set to ~/.openclaw/workspace/ for flat layouts.")
+                    .font(AppTypography.nano)
+                    .foregroundStyle(AppColors.neutral)
             }
             if let errorMessage {
                 Text(errorMessage)
