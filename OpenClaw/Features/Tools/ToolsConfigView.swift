@@ -83,22 +83,27 @@ struct ToolsConfigView: View {
         }
 
         ForEach(config.groups) { group in
-            Section {
-                ForEach(group.tools) { tool in
-                    VStack(alignment: .leading, spacing: Spacing.xxs) {
-                        Text(tool.name)
-                            .font(AppTypography.captionMono)
-                        if !tool.description.isEmpty {
-                            Text(tool.description)
-                                .font(AppTypography.micro)
-                                .foregroundStyle(AppColors.neutral)
-                        }
+            groupSection(group)
+        }
+    }
+
+    @ViewBuilder
+    private func groupSection(_ group: ToolsConfig.ToolGroup) -> some View {
+        Section {
+            ForEach(group.tools) { tool in
+                VStack(alignment: .leading, spacing: Spacing.xxs) {
+                    Text(tool.name)
+                        .font(AppTypography.captionMono)
+                    if !tool.description.isEmpty {
+                        Text(tool.description)
+                            .font(AppTypography.micro)
+                            .foregroundStyle(AppColors.neutral)
                     }
-                    .padding(.vertical, Spacing.xxs)
                 }
-            } header: {
-                Label(group.name, systemImage: group.icon)
+                .padding(.vertical, Spacing.xxs)
             }
+        } header: {
+            Label(group.name, systemImage: group.icon)
         }
     }
 

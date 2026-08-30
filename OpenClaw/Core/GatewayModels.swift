@@ -55,6 +55,16 @@ struct GatewayErrorEnvelope: Decodable, Sendable {
     let error: ErrorDetail?
 }
 
+/// Business-level error surfaced inside a successful /tools/invoke envelope,
+/// e.g. {"status":"forbidden","error":"..."}.
+struct GatewayToolErrorEnvelope: Decodable, Sendable {
+    let status: String?
+    let error: String
+    var message: String {
+        status.map { "\($0): \(error)" } ?? error
+    }
+}
+
 enum GatewayError: LocalizedError {
     case noToken
     case noBaseURL
@@ -63,6 +73,7 @@ enum GatewayError: LocalizedError {
     case serverError(Int, type: String, message: String)
     case emptyContent
     case connectionLost
+    case toolError(String)
 
     var errorDescription: String? {
         switch self {
@@ -80,6 +91,8 @@ enum GatewayError: LocalizedError {
             return "Gateway returned an empty response."
         case .connectionLost:
             return "Connection lost — the agent is still running on the server. Check back shortly."
+        case .toolError(let message):
+            return "Gateway tool error: \(message)"
         }
     }
 }

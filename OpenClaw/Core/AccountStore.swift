@@ -87,8 +87,37 @@ final class AccountStore {
         save()
     }
 
-    // MARK: - Switch
+    // MARK: - Update
+    /// Update an existing account's fields. The token is re-saved only when
+    /// a non-empty token is provided (empty keeps the existing token).
+    func update(id: String, name: String, url: String, token: String?, agentId: String, workspacePath: String) throws {
+        guard let idx = accounts.firstIndex(where: { $0.id == id }) else { return }
 
+        var cleanURL = url.trimmingCharacters(in: .whitespaces)
+        if cleanURL.hasSuffix("/") { cleanURL = String(cleanURL.dropLast()) }
+        if !cleanURL.hasPrefix("http") { cleanURL = "https://\(cleanURL)" }
+
+        var cleanWS = workspacePath.trimmingCharacters(in: .whitespaces)
+        if !cleanWS.isEmpty && !cleanWS.hasSuffix("/") { cleanWS += "/" }
+
+        var account = accounts[idx]
+        account.name = name.trimmingCharacters(in: .whitespaces)
+        account.url = cleanURL
+        account.agentId = agentId.trimmingCharacters(in: .whitespaces).isEmpty ? "orchestrator" : agentId.trimmingCharacters(in: .whitespaces)
+        account.workspacePath = cleanWS
+        accounts[idx] = account
+        save()
+
+        if let token, !token.trimmingCharacters(in: .whitespaces).isEmpty {
+            try KeychainService.saveToken(token.trimmingCharacters(in: .whitespaces), forAccount: id)
+        }
+
+        if activeAccountId == id {
+            AppConstants.account = activeAccount
+        }
+    }
+
+    // MARK: - Switch
     func setActive(_ id: String) {
         guard accounts.contains(where: { $0.id == id }) else { return }
         activeAccountId = id

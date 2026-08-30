@@ -10,13 +10,13 @@ final class ChatViewModel {
     var error: Error?
 
     private let client: GatewayClientProtocol
-    private let sessionKey = SessionKeys.main
+    private let sessionKey: String
     private var streamTask: Task<Void, Never>?
     private var historyLoaded = false
     private var hasPendingSend = false
-
-    init(client: GatewayClientProtocol) {
+    init(client: GatewayClientProtocol, sessionKey: String? = nil) {
         self.client = client
+        self.sessionKey = sessionKey ?? SessionKeys.main
     }
 
     // MARK: - Load History

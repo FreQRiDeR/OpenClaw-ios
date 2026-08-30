@@ -20,6 +20,19 @@ final class SessionsViewModel {
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
     }
 
+    /// All chat-capable sessions (main + subagents), most recently active first.
+    /// These are what the user can select to open a live chat window.
+    var activeSessions: [SessionEntry] {
+        sessions
+            .filter { session in
+                switch session.kind {
+                case .main, .subagent: return true
+                case .cron: return false
+                }
+            }
+            .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+    }
+
     init(repository: SessionRepository) {
         self.repository = repository
     }

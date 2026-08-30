@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ChatView: View {
     @State var vm: ChatViewModel
+    var title: String = "Chat"
     @State private var inputText = ""
 
     var body: some View {
@@ -63,7 +64,7 @@ struct ChatView: View {
                 vm.send(submitted)
             }
         }
-        .navigationTitle("Chat")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

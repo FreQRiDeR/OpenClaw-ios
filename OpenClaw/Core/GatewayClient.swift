@@ -32,7 +32,8 @@ struct GatewayClient: GatewayClientProtocol, Sendable {
         self.token = token
     }
 
-    /// Convenience init from AccountStore.
+    /// Convenience init from AccountStore. Reads actor-isolated state on the main actor.
+    @MainActor
     init?(accountStore: AccountStore) {
         guard let url = accountStore.activeBaseURL(),
               let token = accountStore.activeToken() else { return nil }
@@ -67,6 +68,10 @@ struct GatewayClient: GatewayClientProtocol, Sendable {
         do {
             return try JSONDecoder().decode(Response.self, from: jsonData)
         } catch {
+            // Surface gateway business errors instead of a raw decode error.
+            if let err = try? JSONDecoder().decode(GatewayToolErrorEnvelope.self, from: jsonData) {
+                throw GatewayError.toolError(err.message)
+            }
             // Log the raw JSON and decoding error for debugging
             let preview = String(text.prefix(500))
             Self.logger.error("Decode failed for \(String(describing: Response.self)): \(error.localizedDescription)\nRaw JSON: \(preview)")

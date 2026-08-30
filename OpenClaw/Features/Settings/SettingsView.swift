@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var isTesting = false
     @State private var testResult: TestResult?
     @State private var accountToDelete: GatewayAccount?
+    @State private var accountToEdit: GatewayAccount?
 
     var body: some View {
         List {
@@ -60,6 +61,13 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.plain)
                         .swipeActions(edge: .trailing) {
+                            Button {
+                                accountToEdit = account
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .tint(AppColors.primaryAction)
+
                             Button(role: .destructive) {
                                 accountToDelete = account
                             } label: {
@@ -116,6 +124,9 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddAccount) {
             AddAccountView(accountStore: accountStore)
+        }
+        .sheet(item: $accountToEdit) { account in
+            AddAccountView(accountStore: accountStore, editingAccount: account)
         }
         .alert("Delete Account?", isPresented: Binding(
             get: { accountToDelete != nil },

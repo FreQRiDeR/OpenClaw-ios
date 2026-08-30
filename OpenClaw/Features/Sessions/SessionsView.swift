@@ -4,10 +4,9 @@ struct SessionsView: View {
     @State var vm: SessionsViewModel
     let repository: SessionRepository
     var client: GatewayClientProtocol?
-    @State private var selectedTab: SessionTab = .chat
-
+    @State private var selectedTab: SessionTab = .active
     enum SessionTab: String, CaseIterable {
-        case chat = "Chat History"
+        case active = "Active Sessions"
         case subagents = "Subagents"
     }
 
@@ -24,8 +23,8 @@ struct SessionsView: View {
             .padding(.vertical, Spacing.xs)
 
             switch selectedTab {
-            case .chat:
-                chatSection
+            case .active:
+                activeSessionsSection
             case .subagents:
                 subagentsSection
             }
@@ -42,20 +41,27 @@ struct SessionsView: View {
         .task { await vm.load() }
     }
 
-    // MARK: - Chat History
+    // MARK: - Active Sessions (open in chat)
 
     @ViewBuilder
-    private var chatSection: some View {
-        if vm.isLoading && vm.mainSession == nil {
+    private var activeSessionsSection: some View {
+        if vm.isLoading && vm.activeSessions.isEmpty {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let main = vm.mainSession {
-            ScrollView {
-                VStack(spacing: Spacing.md) {
-                    MainSessionCard(session: main, repository: repository, client: client)
+        } else if !vm.activeSessions.isEmpty {
+            List {
+                Section("Select a session to open in Chat") {
+                    ForEach(vm.activeSessions) { session in
+                        NavigationLink {
+                            if let client {
+                                ChatTab(client: client, sessionKey: session.id, title: session.displayName)
+                            }
+                        } label: {
+                            ActiveSessionRow(session: session)
+                        }
+                    }
                 }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm)
             }
+            .listStyle(.insetGrouped)
             .refreshable {
                 await vm.load()
                 Haptics.shared.refreshComplete()
@@ -65,9 +71,9 @@ struct SessionsView: View {
                 .listStyle(.insetGrouped)
         } else {
             ContentUnavailableView(
-                "No Session",
+                "No Active Sessions",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("No active chat session found.")
+                description: Text("No active chat sessions found.")
             )
         }
     }
@@ -132,8 +138,46 @@ struct SessionsView: View {
     }
 }
 
-// MARK: - Subagent Row
+// MARK: - Active Session Row
+private struct ActiveSessionRow: View {
+    let session: SessionEntry
+    /// Friendly title: the main terminal session is always "Main Session".
+    private var title: String {
+        if case .main = session.kind { return "Main Session" }
+        return session.displayName
+    }
 
+    var body: some View {
+        HStack(spacing: Spacing.xs) {
+            Circle()
+                .fill(session.status == .running ? AppColors.success : AppColors.neutral)
+                .frame(width: 8, height: 8)
+
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text(title)
+                    .font(AppTypography.body)
+                    .lineLimit(1)
+
+                HStack(spacing: Spacing.sm) {
+                    if let model = session.model {
+                        ModelPill(model: model)
+                    }
+                    Label(Formatters.tokens(session.totalTokens), systemImage: "number.circle")
+                        .font(AppTypography.micro)
+                        .foregroundStyle(AppColors.metricPrimary)
+                    Spacer()
+                    Text(session.updatedAtFormatted)
+                        .font(AppTypography.micro)
+                        .foregroundStyle(AppColors.neutral)
+                }
+            }
+        }
+        .padding(.vertical, Spacing.xxs)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Subagent Row
 private struct SubagentRow: View {
     let session: SessionEntry
 
