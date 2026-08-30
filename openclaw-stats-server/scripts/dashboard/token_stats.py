@@ -11,20 +11,32 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
-def _resolve_sessions_dir():
-    # Locate the OpenClaw sessions dir on this machine (no hardcoded paths).
-    home = os.path.expanduser('~')
-    candidates = [
-        os.path.join(home, '.openclaw', 'agents', 'main', 'sessions'),
-        os.path.join(home, '.openclaw', 'agents', 'orchestrator', 'sessions'),
-        os.path.join(home, '.openclaw', 'workspace', 'sessions'),
-    ]
-    for c in candidates:
-        if os.path.isdir(c):
-            return c
-    return candidates[0]
+# Default sessions dir: ~/.openclaw/agents/main/sessions (matches active agent)
+# Override with OPENCLAW_SESSIONS_DIR env var, or auto-detect from config.
+def resolve_sessions_dir():
+    env_dir = os.environ.get('OPENCLAW_SESSIONS_DIR', '')
+    if env_dir and os.path.isdir(env_dir):
+        return env_dir
 
-SESSIONS_DIR = _resolve_sessions_dir()
+    # Auto-detect agent id from openclaw config (agents.list[0].id)
+    config_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    try:
+        import re
+        with open(config_path) as f:
+            content = f.read()
+        # Match the first agent id in agents.list or agents.defaults
+        m = re.search(r'"id"\s*:\s*"([^"]+)"', content)
+        agent_id = m.group(1) if m else 'main'
+        for candidate in [
+            os.path.expanduser(f'~/.openclaw/agents/{agent_id}/sessions'),
+            os.path.expanduser('~/.openclaw/agents/main/sessions'),
+        ]:
+            if os.path.isdir(candidate):
+                return candidate
+    except Exception:
+        pass
+
+    return os.path.expanduser('~/.openclaw/agents/main/sessions')
 
 
 def period_bounds(period: str):
@@ -50,7 +62,7 @@ def parse_ts(ts_str: str) -> int:
         return 0
 
 
-def process_files(start_ms: int, end_ms: int):
+def process_files(start_ms: int, end_ms: int, sessions_dir: str):
     # Aggregation buckets
     totals = {
         'input_tokens': 0,
@@ -78,13 +90,13 @@ def process_files(start_ms: int, end_ms: int):
         'provider': '',
     })
 
-    if not os.path.isdir(SESSIONS_DIR):
+    if not os.path.isdir(sessions_dir):
         return totals, {}
 
-    for fname in os.listdir(SESSIONS_DIR):
+    for fname in os.listdir(sessions_dir):
         if not fname.endswith('.jsonl'):
             continue
-        fpath = os.path.join(SESSIONS_DIR, fname)
+        fpath = os.path.join(sessions_dir, fname)
         try:
             mtime_ms = int(os.path.getmtime(fpath) * 1000)
             if mtime_ms < start_ms:
@@ -169,8 +181,11 @@ def process_files(start_ms: int, end_ms: int):
 
 def main():
     period = sys.argv[1] if len(sys.argv) > 1 else 'today'
+    if len(sys.argv) > 2:
+        os.environ['OPENCLAW_SESSIONS_DIR'] = sys.argv[2]
     start_ms, end_ms = period_bounds(period)
-    totals, by_model = process_files(start_ms, end_ms)
+    sessions_dir = resolve_sessions_dir()
+    totals, by_model = process_files(start_ms, end_ms, sessions_dir)
 
     # Sort models by total_tokens desc
     models_list = sorted(
@@ -186,10 +201,12 @@ def main():
 
     print(json.dumps({
         'period': period,
+        'sessions_dir': sessions_dir,
         'totals': totals,
         'by_model': models_list,
     }))
 
 
 if __name__ == '__main__':
+    import sys
     main()

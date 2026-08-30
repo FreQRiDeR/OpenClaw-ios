@@ -4,16 +4,13 @@ Dashboard: outreach stats card
 Returns JSON: total_leads, new_leads, email_sent, wa_sent, replied, converted
 """
 import json, sys, os, time
-NOTION_VERSION = '2022-06-28'
-LEADS_DB = os.environ.get('NOTION_LEADS_DB', '')
 
-# Read the API key inside the try block so a missing config returns a clean
-# JSON error instead of crashing with an empty stdout.
 try:
     NOTION_API_KEY = open(os.path.expanduser('~/.config/notion/api_key')).read().strip()
 except Exception:
-    print(json.dumps({'error': 'Notion API key not configured (~/.config/notion/api_key)', 'timestamp': int(time.time())}))
-    sys.exit(0)
+    NOTION_API_KEY = ''
+NOTION_VERSION = '2022-06-28'
+LEADS_DB = os.environ.get('NOTION_LEADS_DB', '')
 
 try:
     import urllib.request

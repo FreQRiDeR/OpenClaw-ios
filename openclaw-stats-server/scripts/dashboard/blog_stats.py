@@ -3,14 +3,12 @@
 Dashboard: blog pipeline stats card
 Returns JSON: published, queued, writing, generating_images, publishing, last_published_title, last_published_slug
 """
-import json, os, time, urllib.request, sys
-# Read the API key defensively so a missing config returns a clean JSON error.
+import json, os, time, urllib.request
+
 try:
     NOTION_API_KEY = open(os.path.expanduser('~/.config/notion/api_key')).read().strip()
 except Exception:
-    print(json.dumps({'error': 'Notion API key not configured (~/.config/notion/api_key)', 'timestamp': int(time.time())}))
-    sys.exit(0)
-
+    NOTION_API_KEY = ''
 NOTION_VERSION = '2022-06-28'
 BLOG_DB = '32b9e49d-5499-8128-a42b-f1359a8c8485'
 

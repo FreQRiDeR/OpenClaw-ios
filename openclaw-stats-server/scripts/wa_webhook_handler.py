@@ -19,7 +19,7 @@ import sys
 import urllib.request
 import urllib.parse
 
-BLOCKLIST_PATH = "/home/node/gowa/blocklist.json"
+BLOCKLIST_PATH = os.environ.get("GOWA_BLOCKLIST_PATH", os.path.expanduser("~/.openclaw/gowa/blocklist.json"))
 GOWA_URL = os.environ.get("GOWA_URL", "http://localhost:3000")
 GOWA_DEVICE = os.environ.get("GOWA_DEVICE", "parham")
 HOOKS_TOKEN = os.environ.get("OPENCLAW_HOOKS_TOKEN", "")
@@ -221,11 +221,12 @@ YOUR TASK:
 
 3. To ADD TO BLOCKLIST (no reply needed):
    python3 -c "
-import json
-bl = json.load(open('/home/node/gowa/blocklist.json'))
+import json, os
+_blpath = os.environ.get('GOWA_BLOCKLIST_PATH', os.path.expanduser('~/.openclaw/gowa/blocklist.json'))
+bl = json.load(open(_blpath))
 if '{phone}' not in bl:
     bl.append('{phone}')
-    json.dump(bl, open('/home/node/gowa/blocklist.json','w'))
+    json.dump(bl, open(_blpath,'w'))
 print('blocked')
 "
 

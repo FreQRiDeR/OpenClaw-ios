@@ -21,18 +21,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATS_SERVER_PY="$SCRIPT_DIR/stats_server.py"
 
 if [ -z "$OPENCLAW_GATEWAY_TOKEN" ]; then
-    # Fall back to the gateway token from the OpenClaw config (not exported by the service env)
-    OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
-    if [ -f "$OPENCLAW_CONFIG" ] && command -v python3 > /dev/null; then
-        OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json; c=json.load(open('$OPENCLAW_CONFIG')); print(c.get('gateway',{}).get('auth',{}).get('token',''))" 2>/dev/null)
+    # Fall back to reading the token from the OpenClaw config file.
+    # NOTE: `openclaw config get gateway.auth.token` redacts secrets on some
+    # systems (returns __OPENCLAW_REDACTED__), so parse the file directly.
+    if [ -f "$HOME/.openclaw/openclaw.json" ]; then
+        OPENCLAW_GATEWAY_TOKEN=$(python3 -c "import json,sys; print(json.load(open('$HOME/.openclaw/openclaw.json')).get('gateway',{}).get('auth',{}).get('token',''))" 2>/dev/null)
     fi
 fi
-
+# Must export so the child python3 process inherits it
+export OPENCLAW_GATEWAY_TOKEN
 if [ -z "$OPENCLAW_GATEWAY_TOKEN" ]; then
-    echo "ERROR: OPENCLAW_GATEWAY_TOKEN is not set and no gateway token found in ~/.openclaw/openclaw.json"
+    echo "ERROR: OPENCLAW_GATEWAY_TOKEN is not set"
     exit 1
 fi
-export OPENCLAW_GATEWAY_TOKEN
 
 echo "Starting stats server..."
 nohup python3 "$STATS_SERVER_PY" >> /tmp/stats_server.log 2>&1 &

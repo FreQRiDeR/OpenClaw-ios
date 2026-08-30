@@ -15,6 +15,36 @@ PORT = int(os.environ.get('STATS_SERVER_PORT', '8765'))
 TOKEN = os.environ.get('OPENCLAW_GATEWAY_TOKEN', '')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Workspace root — auto-detected from openclaw config, falls back to ~/.openclaw/workspace
+def resolve_workspace():
+    try:
+        proc = subprocess.run(
+            'openclaw config get agents.defaults.workspace 2>/dev/null',
+            shell=True, capture_output=True, text=True, timeout=10
+        )
+        out = proc.stdout.strip().strip('"')
+        if out and out not in ('null', '') and os.path.isdir(out):
+            return out
+    except Exception:
+        pass
+    # Fallback: parse config file
+    config_path = os.path.expanduser('~/.openclaw/openclaw.json')
+    if os.path.exists(config_path):
+        try:
+            import re
+            with open(config_path) as f:
+                content = f.read()
+            m = re.search(r'"workspace"\s*:\s*"([^"]+)"', content)
+            if m and os.path.isdir(m.group(1)):
+                return m.group(1)
+        except Exception:
+            pass
+    return os.path.expanduser('~/.openclaw/workspace')
+
+WORKSPACE = resolve_workspace()
+SKILLS_BASE = os.path.join(WORKSPACE, 'skills')
+MEMORY_BASE = os.path.join(WORKSPACE, 'memory')
+
 SCRIPTS = {
     # {base} is replaced at runtime with BASE_DIR,
     '/stats/system':   'python3 {base}/system_stats.py',
@@ -46,38 +76,17 @@ def run_script(cache_key, cmd):
         if cache_key in _cache:
             ts, result = _cache[cache_key]
             if now - ts < ttl:
-                return result, True, None  # (data, from_cache, kind)
+                return result, True  # (data, from_cache)
 
     try:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
         data = result.stdout.strip()
-        parsed = json.loads(data)  # validate
-        if isinstance(parsed, dict) and parsed.get('error'):
-            # Backend (Notion config, API failure, etc.) returned an error.
-            # Surface it as a non-2xx so the client can decode the error envelope.
-            with _lock:
-                _cache[cache_key] = (time.time(), data)
-            return data, False, 'backend'
+        json.loads(data)  # validate
         with _lock:
             _cache[cache_key] = (time.time(), data)
-        return data, False, None
+        return data, False
     except Exception as e:
-        return json.dumps({'error': str(e), 'timestamp': int(time.time())}), False, 'exception'
-
-
-def run_script_with_status(cache_key, cmd):
-    """Calls run_script and returns a proper HTTP status for the response.
-
-    Ok -> 200. Backend/config errors (e.g. missing Notion API key) -> 502.
-    Script crash / timeout / invalid output -> 500.
-    """
-    data, from_cache, kind = run_script(cache_key, cmd)
-    status = 200
-    if kind == 'backend':
-        status = 502
-    elif kind == 'exception':
-        status = 500
-    return data, status, from_cache
+        return json.dumps({'error': str(e), 'timestamp': int(time.time())}), False
 
 
 EXEC_ALLOWLIST = {
@@ -97,6 +106,63 @@ EXEC_ALLOWLIST = {
     'channels-list':   'openclaw channels list --json',
     'mcp-list':        'openclaw mcp list --json 2>/dev/null || echo "{}"',
 }
+
+
+def list_memory_files():
+    """List workspace root files + memory/ subdirectory files.
+    Format: root files first, then '---' separator, then memory/ paths.
+    """
+    root_files = []
+    memory_files = []
+
+    try:
+        for entry in sorted(os.listdir(WORKSPACE)):
+            full = os.path.join(WORKSPACE, entry)
+            if os.path.isfile(full) and entry.endswith('.md'):
+                root_files.append(entry)
+    except OSError:
+        pass
+
+    try:
+        for entry in sorted(os.listdir(MEMORY_BASE)):
+            full = os.path.join(MEMORY_BASE, entry)
+            if os.path.isfile(full) and entry.endswith('.md'):
+                memory_files.append(f'memory/{entry}')
+    except OSError:
+        pass
+
+    return '\n'.join(root_files + ['---'] + memory_files)
+
+
+def list_skills():
+    """List skill folder names (directories containing SKILL.md)."""
+    skills = []
+    try:
+        for entry in sorted(os.listdir(SKILLS_BASE)):
+            full = os.path.join(SKILLS_BASE, entry)
+            if os.path.isdir(full) and os.path.isfile(os.path.join(full, 'SKILL.md')):
+                skills.append(entry)
+    except OSError:
+        pass
+    return '\n'.join(skills)
+
+
+def read_workspace_file(rel_path):
+    """Read a file from the workspace root (blocked path traversal)."""
+    import re as _re
+    if not rel_path or not _re.match(r'^[\w\-\.\/]+$', rel_path):
+        return None, 'Invalid path'
+    base = os.path.realpath(WORKSPACE)
+    full = os.path.realpath(os.path.join(base, rel_path))
+    if not full.startswith(base + '/'):
+        return None, 'Path traversal not allowed'
+    if not os.path.isfile(full):
+        return None, f'File not found: {rel_path}'
+    try:
+        with open(full, 'r', encoding='utf-8', errors='replace') as fh:
+            return fh.read(), None
+    except OSError as e:
+        return None, str(e)
 
 
 class StatsHandler(http.server.BaseHTTPRequestHandler):
@@ -121,6 +187,9 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split('?')[0]
+        # Tailscale serve / nginx may strip the /stats mount prefix
+        if path == '/exec':
+            path = '/stats/exec'
 
         # WhatsApp webhook — separate auth (GoWA secret header, no bearer token)
         if path == '/wa/webhook':
@@ -173,39 +242,48 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
             command_key = payload.get('command', '').strip()
             args = payload.get('args', '')
 
-            # Parameterised commands — validated separately, never shell-interpolated unsafely
-            if command_key == 'file-read':
-                # Read a file under ~/.openclaw/workspace (memory_get only covers memory/)
-                import os as _os
-                WS_BASE = _os.path.realpath(_os.path.join(_os.path.expanduser('~'), '.openclaw', 'workspace'))
-                rel = (args or '').strip().lstrip('/')
-                if not rel:
-                    self.send_json(400, {'error': 'Usage: file-read <relative-path>'})
-                    return
-                full_path = _os.path.realpath(_os.path.join(WS_BASE, rel))
-                if full_path != WS_BASE and not full_path.startswith(WS_BASE + _os.sep):
-                    self.send_json(403, {'error': 'Path traversal not allowed'})
-                    return
-                if not _os.path.isfile(full_path):
-                    self.send_json(404, {'error': f'File not found: {rel}'})
-                    return
-                try:
-                    with open(full_path, 'r', encoding='utf-8', errors='replace') as fh:
-                        content = fh.read()
-                except OSError as e:
-                    self.send_json(500, {'error': str(e)})
-                    return
+            # --- memory-list: workspace root .md files + memory/ subdirectory ---
+            if command_key == 'memory-list':
+                stdout = list_memory_files()
                 self.send_json(200, {
-                    'command': 'file-read',
+                    'command': 'memory-list',
                     'exit_code': 0,
-                    'stdout': json.dumps({'path': rel, 'text': content}),
+                    'stdout': stdout,
                     'stderr': '',
                     'duration_ms': 0,
                 })
                 return
 
+            # --- skills-list: skill folder names ---
+            if command_key == 'skills-list':
+                stdout = list_skills()
+                self.send_json(200, {
+                    'command': 'skills-list',
+                    'exit_code': 0,
+                    'stdout': stdout,
+                    'stderr': '',
+                    'duration_ms': 0,
+                })
+                return
+
+            # --- file-read: read any workspace file (root files, skills, etc.) ---
+            if command_key == 'file-read':
+                content, err = read_workspace_file((args or '').strip())
+                if err:
+                    self.send_json(404, {'error': err})
+                    return
+                # Return JSON so the app can parse path + text
+                self.send_json(200, {
+                    'command': 'file-read',
+                    'exit_code': 0,
+                    'stdout': json.dumps({'text': content, 'path': (args or '').strip()}),
+                    'stderr': '',
+                    'duration_ms': 0,
+                })
+                return
+
+            # Parameterised commands — validated separately, never shell-interpolated unsafely
             if command_key == 'skill-read':
-                SKILLS_BASE = os.path.join(os.path.expanduser('~'), '.openclaw', 'workspace', 'orchestrator', 'skills')
                 import re as _re, os as _os
                 raw_args = (args or '').strip()
                 # Split into exactly two parts: skill-name and relative file path
@@ -244,84 +322,8 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 })
                 return
 
-            if command_key == 'skills-list':
-                # Real skills inventory via the openclaw CLI
-                import json as _json, subprocess as _subprocess
-                try:
-                    out = _subprocess.run(
-                        ['openclaw', 'skills', 'list', '--json'],
-                        capture_output=True, text=True, timeout=30,
-                    )
-                    if out.returncode == 0:
-                        data = _json.loads(out.stdout)
-                        skills = data.get('skills', data) if isinstance(data, dict) else data
-                        lines = []
-                        for s in skills:
-                            name = s.get('name', '?')
-                            emoji = s.get('emoji', '')
-                            status = 'ok' if s.get('eligible') else 'unavailable'
-                            if s.get('disabled'):
-                                status = 'disabled'
-                            desc = (s.get('description') or '').split('\n')[0][:100]
-                            # Tab-separated: <name>\t[status] emoji desc — the iOS app
-                            # splits on tab and uses field 0 as the skill id.
-                            lines.append(f"{name}\t[{status}] {emoji} {desc}".rstrip())
-                        stdout = '\n'.join(lines) or '(no skills found)'
-                        self.send_json(200, {
-                            'command': 'skills-list', 'exit_code': 0,
-                            'stdout': stdout, 'stderr': '', 'duration_ms': 0,
-                        })
-                    else:
-                        self.send_json(200, {
-                            'command': 'skills-list', 'exit_code': out.returncode,
-                            'stdout': out.stdout, 'stderr': out.stderr, 'duration_ms': 0,
-                        })
-                except FileNotFoundError:
-                    self.send_json(200, {
-                        'command': 'skills-list', 'exit_code': 127,
-                        'stdout': '', 'stderr': 'openclaw CLI not found', 'duration_ms': 0,
-                    })
-                except Exception as e:
-                    self.send_json(500, {'command': 'skills-list', 'error': str(e)})
-                return
-
-            if command_key == 'memory-list':
-                # List actual memory files under ~/.openclaw/workspace/memory
-                import os as _os
-                MEM_BASE = _os.path.join(_os.path.expanduser('~'), '.openclaw', 'workspace', 'memory')
-                if not _os.path.isdir(MEM_BASE):
-                    self.send_json(200, {
-                        'command': 'memory-list', 'exit_code': 0,
-                        'stdout': f'(no memory directory at {MEM_BASE})',
-                        'stderr': '', 'duration_ms': 0,
-                    })
-                    return
-                import time as _time
-                lines = []
-                for root, dirs, fnames in _os.walk(MEM_BASE):
-                    dirs[:] = [d for d in sorted(dirs) if not d.startswith('.')]
-                    for fname in sorted(fnames):
-                        if fname.startswith('.'):
-                            continue
-                        full = _os.path.join(root, fname)
-                        rel = _os.path.relpath(full, MEM_BASE)
-                        try:
-                            st = _os.stat(full)
-                            size = st.st_size
-                            mtime = _time.strftime('%Y-%m-%d %H:%M', _time.localtime(st.st_mtime))
-                            lines.append(f"{rel}  ({size} bytes, modified {mtime})")
-                        except OSError:
-                            lines.append(rel)
-                self.send_json(200, {
-                    'command': 'memory-list', 'exit_code': 0,
-                    'stdout': '\n'.join(lines) or '(memory directory is empty)',
-                    'stderr': '', 'duration_ms': 0,
-                })
-                return
-
             if command_key == 'skill-files':
                 skill_name = (args or '').strip()
-                SKILLS_BASE = os.path.join(os.path.expanduser('~'), '.openclaw', 'workspace', 'orchestrator', 'skills')
                 # Validate: alphanumeric, hyphens, underscores, dots only — no path traversal
                 import re as _re
                 if not skill_name or not _re.match(r'^[\w\-\.]+$', skill_name):
@@ -520,11 +522,11 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
             if command_key not in EXEC_ALLOWLIST:
                 self.send_json(403, {
                     'error': f'Command not allowed: {command_key!r}',
-                    'allowed': list(EXEC_ALLOWLIST.keys()) + ['skill-files', 'mcp-tools'],
+                    'allowed': list(EXEC_ALLOWLIST.keys()) + ['skill-files', 'skill-read', 'memory-list', 'skills-list', 'file-read', 'mcp-tools'],
                 })
                 return
 
-            cmd = EXEC_ALLOWLIST[command_key]
+            cmd = EXEC_ALLOWLIST[command_key].format(base=BASE_DIR)
             t0 = time.time()
             try:
                 proc = subprocess.run(
@@ -561,6 +563,9 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
 
         full_path = self.path
         path = full_path.split('?')[0]
+        # Tailscale serve / nginx may strip the /stats mount prefix
+        if not path.startswith('/stats/') and path in ('/health', '/system', '/outreach', '/blog', '/tokens'):
+            path = '/stats' + path
 
         if path == '/stats/health':
             self.send_json(200, {'ok': True, 'timestamp': int(time.time())})
@@ -578,14 +583,14 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
             if period not in ('today', 'yesterday', 'week'):
                 period = 'today'
             cache_key = f'/stats/tokens?period={period}'
-            token_script = os.path.join(BASE_DIR, 'token_stats.py')
-            cmd = f'python3 {token_script} {period}'
-            data, status, _ = run_script_with_status(cache_key, cmd)
-            self.send_json(status, data)
+            cmd = f'python3 {BASE_DIR}/token_stats.py {period}'
+            data, _ = run_script(cache_key, cmd)
+            self.send_json(200, data)
             return
+
         cmd = SCRIPTS[path]
-        data, status, _ = run_script_with_status(path, cmd)
-        self.send_json(status, data)
+        data, _ = run_script(path, cmd)
+        self.send_json(200, data)
 
 
 if __name__ == '__main__':

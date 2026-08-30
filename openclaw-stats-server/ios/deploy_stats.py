@@ -82,11 +82,12 @@ def find_stats_server(workspace):
 
 
 def get_gateway_token():
-    """Read gateway token — never inline into shell strings."""
-    code, out, _ = run("openclaw config get gateway.auth.token 2>/dev/null")
-    if code == 0 and out and out not in ("null", ""):
-        return out.strip('"')
+    """Read gateway token from config file directly.
 
+    NOTE: `openclaw config get gateway.auth.token` redacts secrets on some
+    systems (returns __OPENCLAW_REDACTED__), which would start the stats
+    server with a bogus token. Always prefer parsing the config file.
+    """
     config_path = os.path.expanduser("~/.openclaw/openclaw.json")
     if os.path.exists(config_path):
         try:
@@ -98,9 +99,10 @@ def get_gateway_token():
                 return m.group(1)
         except Exception:
             pass
+    code, out, _ = run("openclaw config get gateway.auth.token 2>/dev/null")
+    if code == 0 and out and out not in ("null", "", "__OPENCLAW_REDACTED__"):
+        return out.strip('"')
     return None
-
-
 def start_server(stats_script, token):
     """Start stats server with token passed via environment, not shell string."""
     ensure_script = os.path.join(os.path.dirname(stats_script), "..", "..", "ensure_stats_server.sh")
