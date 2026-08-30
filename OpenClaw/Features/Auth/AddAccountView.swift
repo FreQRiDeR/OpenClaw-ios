@@ -69,6 +69,16 @@ struct AddAccountView: View {
                     .foregroundStyle(AppColors.neutral)
                     .multilineTextAlignment(.center)
             }
+            // Name
+            VStack(alignment: .leading, spacing: Spacing.xxs) {
+                Text("NAME")
+                    .font(AppTypography.micro)
+                    .foregroundStyle(AppColors.neutral)
+                TextField("My Server", text: $nameInput)
+                    .autocorrectionDisabled()
+                    .padding(Spacing.sm)
+                    .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
+            }
             // Gateway URL
             VStack(alignment: .leading, spacing: Spacing.xxs) {
                 Text("GATEWAY URL")

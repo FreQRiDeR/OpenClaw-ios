@@ -13,13 +13,22 @@ struct SkillFile: Identifiable, Sendable {
     }
 
     /// Parse skills-list stdout into skill entries.
-    /// Filters out non-skill entries (files with extensions).
+    /// Each line is `<name>\t[status] <emoji> <description>` — id is field 0.
+    /// Legacy fallback: plain lines with just the skill name.
     static func parse(stdout: String) -> [SkillFile] {
         stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map(String.init)
-            .filter { !$0.contains(".") && !$0.isEmpty }
-            .map { SkillFile(id: $0, name: $0) }
+            .compactMap { line -> SkillFile? in
+                let id = line.split(separator: "\t", maxSplits: 1).first.map(String.init) ?? line
+                let trimmed = id.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty, !trimmed.contains("/") else { return nil }
+                return SkillFile(id: trimmed, name: trimmed)
+            }
+            .filter { skill in
+                // Deduplicate by id
+                !skill.id.isEmpty
+            }
             .sorted { $0.displayName < $1.displayName }
     }
 }

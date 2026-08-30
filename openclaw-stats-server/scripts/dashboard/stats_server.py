@@ -92,8 +92,6 @@ EXEC_ALLOWLIST = {
     'session-cleanup': 'openclaw sessions cleanup --enforce',
     'plugin-update':   'openclaw plugins update --all',
     'restart-stats':   'bash {base}/ensure_stats_server.sh --force',
-    'memory-list':     'echo "Not available in standalone repo"',
-    'skills-list':     'echo "Not available in standalone repo"',
     'models-status':   'openclaw models status --json',
     'agents-list':     'openclaw agents list --json',
     'channels-list':   'openclaw channels list --json',
@@ -176,6 +174,36 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
             args = payload.get('args', '')
 
             # Parameterised commands — validated separately, never shell-interpolated unsafely
+            if command_key == 'file-read':
+                # Read a file under ~/.openclaw/workspace (memory_get only covers memory/)
+                import os as _os
+                WS_BASE = _os.path.realpath(_os.path.join(_os.path.expanduser('~'), '.openclaw', 'workspace'))
+                rel = (args or '').strip().lstrip('/')
+                if not rel:
+                    self.send_json(400, {'error': 'Usage: file-read <relative-path>'})
+                    return
+                full_path = _os.path.realpath(_os.path.join(WS_BASE, rel))
+                if full_path != WS_BASE and not full_path.startswith(WS_BASE + _os.sep):
+                    self.send_json(403, {'error': 'Path traversal not allowed'})
+                    return
+                if not _os.path.isfile(full_path):
+                    self.send_json(404, {'error': f'File not found: {rel}'})
+                    return
+                try:
+                    with open(full_path, 'r', encoding='utf-8', errors='replace') as fh:
+                        content = fh.read()
+                except OSError as e:
+                    self.send_json(500, {'error': str(e)})
+                    return
+                self.send_json(200, {
+                    'command': 'file-read',
+                    'exit_code': 0,
+                    'stdout': json.dumps({'path': rel, 'text': content}),
+                    'stderr': '',
+                    'duration_ms': 0,
+                })
+                return
+
             if command_key == 'skill-read':
                 SKILLS_BASE = os.path.join(os.path.expanduser('~'), '.openclaw', 'workspace', 'orchestrator', 'skills')
                 import re as _re, os as _os
@@ -213,6 +241,81 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                     'stdout': content,
                     'stderr': '',
                     'duration_ms': 0,
+                })
+                return
+
+            if command_key == 'skills-list':
+                # Real skills inventory via the openclaw CLI
+                import json as _json, subprocess as _subprocess
+                try:
+                    out = _subprocess.run(
+                        ['openclaw', 'skills', 'list', '--json'],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    if out.returncode == 0:
+                        data = _json.loads(out.stdout)
+                        skills = data.get('skills', data) if isinstance(data, dict) else data
+                        lines = []
+                        for s in skills:
+                            name = s.get('name', '?')
+                            emoji = s.get('emoji', '')
+                            status = 'ok' if s.get('eligible') else 'unavailable'
+                            if s.get('disabled'):
+                                status = 'disabled'
+                            desc = (s.get('description') or '').split('\n')[0][:100]
+                            # Tab-separated: <name>\t[status] emoji desc — the iOS app
+                            # splits on tab and uses field 0 as the skill id.
+                            lines.append(f"{name}\t[{status}] {emoji} {desc}".rstrip())
+                        stdout = '\n'.join(lines) or '(no skills found)'
+                        self.send_json(200, {
+                            'command': 'skills-list', 'exit_code': 0,
+                            'stdout': stdout, 'stderr': '', 'duration_ms': 0,
+                        })
+                    else:
+                        self.send_json(200, {
+                            'command': 'skills-list', 'exit_code': out.returncode,
+                            'stdout': out.stdout, 'stderr': out.stderr, 'duration_ms': 0,
+                        })
+                except FileNotFoundError:
+                    self.send_json(200, {
+                        'command': 'skills-list', 'exit_code': 127,
+                        'stdout': '', 'stderr': 'openclaw CLI not found', 'duration_ms': 0,
+                    })
+                except Exception as e:
+                    self.send_json(500, {'command': 'skills-list', 'error': str(e)})
+                return
+
+            if command_key == 'memory-list':
+                # List actual memory files under ~/.openclaw/workspace/memory
+                import os as _os
+                MEM_BASE = _os.path.join(_os.path.expanduser('~'), '.openclaw', 'workspace', 'memory')
+                if not _os.path.isdir(MEM_BASE):
+                    self.send_json(200, {
+                        'command': 'memory-list', 'exit_code': 0,
+                        'stdout': f'(no memory directory at {MEM_BASE})',
+                        'stderr': '', 'duration_ms': 0,
+                    })
+                    return
+                import time as _time
+                lines = []
+                for root, dirs, fnames in _os.walk(MEM_BASE):
+                    dirs[:] = [d for d in sorted(dirs) if not d.startswith('.')]
+                    for fname in sorted(fnames):
+                        if fname.startswith('.'):
+                            continue
+                        full = _os.path.join(root, fname)
+                        rel = _os.path.relpath(full, MEM_BASE)
+                        try:
+                            st = _os.stat(full)
+                            size = st.st_size
+                            mtime = _time.strftime('%Y-%m-%d %H:%M', _time.localtime(st.st_mtime))
+                            lines.append(f"{rel}  ({size} bytes, modified {mtime})")
+                        except OSError:
+                            lines.append(rel)
+                self.send_json(200, {
+                    'command': 'memory-list', 'exit_code': 0,
+                    'stdout': '\n'.join(lines) or '(memory directory is empty)',
+                    'stderr': '', 'duration_ms': 0,
                 })
                 return
 
