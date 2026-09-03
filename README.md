@@ -110,11 +110,17 @@ The app talks to a small **stats server** (Python, port 8765) that sits next to 
 
 One command on the machine that runs your gateway — **no skill, no agent involvement**:
 
+**macOS / Linux**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/main/install.sh | bash
 ```
 
-Or from a clone of this repo: `bash install.sh`
+**Windows** (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/main/install.ps1 | iex
+```
+
+Or from a clone of this repo: `bash install.sh` / `powershell -ExecutionPolicy Bypass -File .\install.ps1`
 
 It will:
 1. check prerequisites (`openclaw`, `python3`, `tailscale`) and read the gateway token from `~/.openclaw/openclaw.json`
@@ -124,7 +130,9 @@ It will:
 5. configure `tailscale serve` so `/` → gateway and `/stats` → stats server, then probe every endpoint the app uses
 6. print the exact **Gateway URL** and **Agent ID** to type into the app
 
-Options: `--no-tailscale` (nginx / LAN instead), `--dest DIR`, `--force`.
+Options: `--no-tailscale` (nginx / LAN instead), `--dest DIR`, `--force` (PowerShell: `-NoTailscale`, `-Dest`, `-Force`).
+
+The stats server is pure Python stdlib — no `pip install` — and runs on macOS, Linux and Windows (Windows uses `ctypes` for CPU/RAM/uptime; there is no load average on Windows so it reports 0.0).
 
 > **Why the path split matters:** the app uses one base URL for everything. If your proxy only maps `/` to the gateway, `/stats/*` lands on the gateway and you'll see *"Data couldn't be read because it isn't in the correct format"* (System Health) or *"HTTP 404 Not Found"* (Memory & Skills, Tools, Tokens). The app detects this and tells you to run the installer.
 
@@ -137,6 +145,15 @@ bash $S/scripts/dashboard/ensure_stats_server.sh --force   # start / restart
 pkill -f stats_server.py                                    # stop
 bash $S/scripts/setup_tailscale.sh --verify                 # health-check every endpoint
 tail -f /tmp/stats_server.log                               # logs
+```
+
+Windows:
+```powershell
+$S = "$HOME\.openclaw\openclaw-stats-server"
+powershell -ExecutionPolicy Bypass -File $S\scripts\dashboard\ensure_stats_server.ps1 -Force   # start / restart
+powershell -ExecutionPolicy Bypass -File $S\scripts\dashboard\ensure_stats_server.ps1 -Stop    # stop
+powershell -ExecutionPolicy Bypass -File $S\scripts\setup_tailscale.ps1 -Verify                 # health-check
+Get-Content $env:TEMP\stats_server.log -Wait                                                    # logs
 ```
 </details>
 
@@ -170,6 +187,8 @@ The installer checks these for you and warns if anything is missing. Add to `ope
 3. **Build and run** on a simulator or device (iOS 17+)
 4. **On first launch**, enter your gateway URL (e.g. `https://your-server.com:18789`), Bearer token and **Agent ID** — this must match `openclaw agents list` (`main` on a stock install); a wrong ID means empty chat history
 5. The dashboard loads automatically — pull down to refresh
+
+**OpenClaw version compatibility:** the app targets the gateway `/tools/invoke` and `/v1/chat/completions` APIs. OpenClaw 8.x renamed the scheduler CLI from `cron` to `automations`; the app tries both tool names and remembers whichever the gateway accepts, so one build works against older and newer gateways.
 
 ### Security
 

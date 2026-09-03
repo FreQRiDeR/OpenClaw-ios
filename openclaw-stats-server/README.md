@@ -14,10 +14,27 @@ Standalone extraction of the lightweight stats/admin server used alongside OpenC
 - Intended to run behind nginx on a custom domain alongside OpenClaw
 - Gateway should remain loopback-only; stats server is typically proxied under `/stats/*` and `/tools/*`
 
+## Platforms
+macOS, Linux, **Windows**. Pure Python 3 stdlib — nothing to `pip install`.
+`system_stats.py` uses `/proc` on Linux, `sysctl`/`vm_stat`/`top` on macOS and `ctypes` Win32 calls
+(`GetTickCount64`, `GlobalMemoryStatusEx`, `GetSystemTimes`) on Windows. Every JSON key is always
+emitted (the iOS DTO has non-optional fields); Windows has no load average so it reports `0.0`.
+
+Each shell script has a PowerShell twin with the same behaviour and flags:
+
+| bash | PowerShell |
+|------|------------|
+| `install.sh` | `install.ps1` |
+| `scripts/dashboard/ensure_stats_server.sh [--force]` | `scripts/dashboard/ensure_stats_server.ps1 [-Force] [-Stop]` |
+| `scripts/setup_tailscale.sh [--verify]` | `scripts/setup_tailscale.ps1 [-Verify]` |
+
 ## Install (recommended)
 From the repo root, on the machine running the gateway:
 ```bash
 bash install.sh        # or: curl -fsSL https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/main/install.sh | bash
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1    # or: irm https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/main/install.ps1 | iex
 ```
 Installs to `~/.openclaw/openclaw-stats-server`, starts the server, configures Tailscale and verifies
 every endpoint. Everything below is what the installer does, for when you want to do it by hand.
@@ -72,7 +89,8 @@ prints the correct value.
 - `scripts/dashboard/stats_server.py` — HTTP server
 - `scripts/dashboard/*.py` — stat generators
 - `scripts/wa_webhook_handler.py` — optional WhatsApp webhook handler
-- `scripts/setup_tailscale.sh` — Tailscale routing + end-to-end verifier (`--verify` for read-only)
+- `scripts/setup_tailscale.sh` / `.ps1` — Tailscale routing + end-to-end verifier (`--verify` / `-Verify` for read-only)
+- `scripts/dashboard/ensure_stats_server.sh` / `.ps1` — start / restart / stop
 - `ios/deploy_stats.py` — legacy helper from the old `skill-ios-setup` skill; superseded by `../install.sh`
 
 ## Notes
