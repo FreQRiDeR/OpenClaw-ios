@@ -104,35 +104,47 @@ Models & Config (provider icons, fallbacks, aliases). Channels (status dots, pro
 
 ## Getting Started
 
-### 1. Set up the Stats Server skill on OpenClaw
+### 1. Install the stats server on your OpenClaw machine
 
-The app communicates with your gateway through a **stats server skill** that needs to be installed first. This skill exposes the `/stats/*` endpoints and `/stats/exec` commands that the app depends on.
+The app talks to a small **stats server** (Python, port 8765) that sits next to your gateway and provides the `/stats/*` endpoints — system health, token usage, memory & skills, and the allowlisted admin commands. Without it only Chat, Sessions and Automations work.
 
-Just ask your agent:
-
-> "Set me up for the iOS app"
-
-The `skill-ios-setup` skill will detect your environment, deploy the stats server, configure auto-restart, and walk you through exposing your gateway (nginx, Tailscale, or local network).
-
-Install it first if you don't have it:
+One command on the machine that runs your gateway — **no skill, no agent involvement**:
 
 ```bash
-openclaw skills install skill-ios-setup
+curl -fsSL https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/main/install.sh | bash
 ```
 
-> Available on [ClawHub](https://clawhub.ai) — search `skill-ios-setup`.
+Or from a clone of this repo: `bash install.sh`
 
-The skill provides:
-- `GET /stats/system` — system health (CPU, RAM, disk)
-- `GET /stats/tokens` — token usage analytics
-- `POST /stats/exec` — allowlisted command execution (doctor, logs, status, etc.)
-- All the admin commands (models-status, channels-list, tools-list, etc.)
+It will:
+1. check prerequisites (`openclaw`, `python3`, `tailscale`) and read the gateway token from `~/.openclaw/openclaw.json`
+2. warn about any gateway config the app needs (see step 2) — it never edits your config
+3. install to `~/.openclaw/openclaw-stats-server` (from the repo, the bundled `docs/openclaw-stats-server.zip`, or a download)
+4. start the server and confirm `/stats/health` answers with your token
+5. configure `tailscale serve` so `/` → gateway and `/stats` → stats server, then probe every endpoint the app uses
+6. print the exact **Gateway URL** and **Agent ID** to type into the app
 
-> Without this skill, only `/tools/invoke` and `/v1/chat/completions` endpoints will work. The dashboard cards and commands will show errors.
+Options: `--no-tailscale` (nginx / LAN instead), `--dest DIR`, `--force`.
+
+> **Why the path split matters:** the app uses one base URL for everything. If your proxy only maps `/` to the gateway, `/stats/*` lands on the gateway and you'll see *"Data couldn't be read because it isn't in the correct format"* (System Health) or *"HTTP 404 Not Found"* (Memory & Skills, Tools, Tokens). The app detects this and tells you to run the installer.
+
+<details>
+<summary>Day-to-day commands (the server does not auto-start on reboot, by design)</summary>
+
+```bash
+S=~/.openclaw/openclaw-stats-server
+bash $S/scripts/dashboard/ensure_stats_server.sh --force   # start / restart
+pkill -f stats_server.py                                    # stop
+bash $S/scripts/setup_tailscale.sh --verify                 # health-check every endpoint
+tail -f /tmp/stats_server.log                               # logs
+```
+</details>
+
+More detail in [openclaw-stats-server/README.md](openclaw-stats-server/README.md).
 
 ### 2. Configure the gateway
 
-Add these settings to your `openclaw.json`:
+The installer checks these for you and warns if anything is missing. Add to `openclaw.json`:
 
 ```json
 {
@@ -156,7 +168,7 @@ Add these settings to your `openclaw.json`:
 1. **Clone** this repo
 2. **Open** `OpenClaw.xcodeproj` in Xcode 16+
 3. **Build and run** on a simulator or device (iOS 17+)
-4. **On first launch**, enter your gateway URL (e.g. `https://your-server.com:18789`) and Bearer token
+4. **On first launch**, enter your gateway URL (e.g. `https://your-server.com:18789`), Bearer token and **Agent ID** — this must match `openclaw agents list` (`main` on a stock install); a wrong ID means empty chat history
 5. The dashboard loads automatically — pull down to refresh
 
 ### Security

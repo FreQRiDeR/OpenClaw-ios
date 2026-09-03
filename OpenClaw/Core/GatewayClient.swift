@@ -181,13 +181,37 @@ struct GatewayClient: GatewayClientProtocol, Sendable {
 
     private func validateHTTPResponse(_ response: URLResponse, data: Data, path: String) throws {
         guard let http = response as? HTTPURLResponse else { throw GatewayError.invalidResponse }
+        let isStatsPath = path.hasPrefix("stats/")
         guard (200...299).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            // The stats server always answers JSON. A bare 404 "Not Found" on /stats/* means the
+            // request landed on the gateway — the proxy isn't splitting /stats to port 8765.
+            if isStatsPath, http.statusCode == 404, !Self.looksLikeJSON(data) {
+                Self.logger.error("/\(path) returned 404 non-JSON — stats server not routed")
+                throw GatewayError.statsNotRouted(path: path, status: http.statusCode)
+            }
             if let envelope = try? JSONDecoder().decode(GatewayErrorEnvelope.self, from: data), let err = envelope.error {
                 throw GatewayError.serverError(http.statusCode, type: err.type, message: err.message)
             }
             throw GatewayError.httpError(http.statusCode, body: body)
         }
+        // 200 with an HTML body on /stats/* is the gateway's web UI (SPA fallback), not stats JSON.
+        // Without this check the caller sees "data couldn't be read because it isn't in the correct format".
+        if isStatsPath, Self.looksLikeHTML(data, contentType: http.value(forHTTPHeaderField: "Content-Type")) {
+            Self.logger.error("/\(path) returned HTML — stats server not routed (got gateway UI)")
+            throw GatewayError.statsNotRouted(path: path, status: http.statusCode)
+        }
+    }
+
+    private static func looksLikeJSON(_ data: Data) -> Bool {
+        guard let first = data.first(where: { $0 != 0x20 && $0 != 0x0A && $0 != 0x0D && $0 != 0x09 }) else { return false }
+        return first == UInt8(ascii: "{") || first == UInt8(ascii: "[")
+    }
+
+    private static func looksLikeHTML(_ data: Data, contentType: String?) -> Bool {
+        if let ct = contentType?.lowercased(), ct.contains("text/html") { return true }
+        guard let head = String(data: data.prefix(64), encoding: .utf8)?.lowercased() else { return false }
+        return head.contains("<!doctype html") || head.contains("<html")
     }
 }
 

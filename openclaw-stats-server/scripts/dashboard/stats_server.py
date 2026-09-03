@@ -104,7 +104,8 @@ EXEC_ALLOWLIST = {
     'models-status':   'openclaw models status --json',
     'agents-list':     'openclaw agents list --json',
     'channels-list':   'openclaw channels list --json',
-    'mcp-list':        'openclaw mcp list --json 2>/dev/null || echo "{}"',
+    # NOTE: literal braces must be doubled — these strings go through .format(base=...)
+    'mcp-list':        'openclaw mcp list --json 2>/dev/null || echo "{{}}"',
 }
 
 
@@ -568,7 +569,13 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
             path = '/stats' + path
 
         if path == '/stats/health':
-            self.send_json(200, {'ok': True, 'timestamp': int(time.time())})
+            self.send_json(200, {
+                'ok': True,
+                'service': 'openclaw-stats-server',
+                'port': PORT,
+                'workspace': WORKSPACE,
+                'timestamp': int(time.time()),
+            })
             return
 
         if path not in SCRIPTS:
@@ -597,6 +604,19 @@ if __name__ == '__main__':
     if not TOKEN:
         print('ERROR: OPENCLAW_GATEWAY_TOKEN not set')
         exit(1)
-    server = http.server.ThreadingHTTPServer(('0.0.0.0', PORT), StatsHandler)
-    print(f'Stats server running on port {PORT}')
+    if TOKEN == '__OPENCLAW_REDACTED__':
+        print('ERROR: OPENCLAW_GATEWAY_TOKEN is the redacted placeholder — read the token from ~/.openclaw/openclaw.json instead of `openclaw config get`')
+        exit(1)
+    # Fail fast on template typos (e.g. an un-escaped '{}' in a shell command)
+    for _k, _v in EXEC_ALLOWLIST.items():
+        try:
+            _v.format(base=BASE_DIR)
+        except (IndexError, KeyError) as _e:
+            print(f'ERROR: EXEC_ALLOWLIST[{_k!r}] has a bad format template: {_e}')
+            exit(1)
+    # Bind to loopback by default — Tailscale serve / nginx proxy to it locally.
+    # Set STATS_SERVER_BIND=0.0.0.0 to expose on the LAN.
+    bind = os.environ.get('STATS_SERVER_BIND', '127.0.0.1')
+    server = http.server.ThreadingHTTPServer((bind, PORT), StatsHandler)
+    print(f'Stats server running on {bind}:{PORT} (workspace: {WORKSPACE})')
     server.serve_forever()

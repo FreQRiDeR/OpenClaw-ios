@@ -1,21 +1,26 @@
 import Foundation
 
 /// App-level constants derived from the active account.
-/// Falls back to "orchestrator" if no account is active (should not happen in normal use).
+/// Falls back to `defaultAgentId` if no account is active (should not happen in normal use).
 @MainActor
 enum AppConstants {
     static var account: GatewayAccount?
 
-    static var agentId: String { account?.agentId ?? "orchestrator" }
-    static var workspaceRoot: String { account?.workspaceRoot ?? "~/.openclaw/workspace/orchestrator/" }
+    /// OpenClaw's built-in default agent ID (`openclaw agents list` → "main (default)").
+    /// Chat history and session keys are `agent:<id>:main`, so this MUST match the server
+    /// or `sessions_history` fails with "Agent-to-agent history is disabled".
+    static let defaultAgentId = "main"
+
+    static var agentId: String { account?.agentId ?? defaultAgentId }
+    static var workspaceRoot: String { account?.workspaceRoot ?? "~/.openclaw/workspace/" }
 }
 
 /// Well-known session keys — derived from the active account's agentId.
 @MainActor
 enum SessionKeys {
-    static var main: String { AppConstants.account?.sessionKeyMain ?? "agent:orchestrator:main" }
-    static var cronPrefix: String { AppConstants.account?.sessionKeyCronPrefix ?? "agent:orchestrator:cron:" }
-    static var subagentPrefix: String { AppConstants.account?.sessionKeySubagentPrefix ?? "agent:orchestrator:subagent:" }
+    static var main: String { AppConstants.account?.sessionKeyMain ?? "agent:\(AppConstants.defaultAgentId):main" }
+    static var cronPrefix: String { AppConstants.account?.sessionKeyCronPrefix ?? "agent:\(AppConstants.defaultAgentId):cron:" }
+    static var subagentPrefix: String { AppConstants.account?.sessionKeySubagentPrefix ?? "agent:\(AppConstants.defaultAgentId):subagent:" }
 }
 
 // MARK: - Gateway Response Wrapper
@@ -74,9 +79,14 @@ enum GatewayError: LocalizedError {
     case emptyContent
     case connectionLost
     case toolError(String)
+    /// A `/stats/*` request reached the gateway (or something else) instead of the stats server.
+    /// Typical cause: the reverse proxy (Tailscale serve / nginx) only maps `/` → gateway.
+    case statsNotRouted(path: String, status: Int)
 
     var errorDescription: String? {
         switch self {
+        case .statsNotRouted(let path, let status):
+            return "Stats server not reachable at /\(path) (HTTP \(status)). Your proxy is sending /stats/* to the gateway instead of port 8765. On the server run: bash openclaw-stats-server/scripts/setup_tailscale.sh"
         case .noToken:
             return "No authentication token. Tap Configure to add your Bearer token."
         case .noBaseURL:

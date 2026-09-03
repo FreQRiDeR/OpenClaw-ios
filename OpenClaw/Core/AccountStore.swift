@@ -18,9 +18,11 @@ struct GatewayAccount: Codable, Identifiable, Sendable {
     }
 
     /// Resolved workspace root used in prompts.
-    /// Custom path if set, otherwise `~/.openclaw/workspace/{agentId}/`.
+    /// Custom path if set. Otherwise the default agent lives in the flat
+    /// `~/.openclaw/workspace/` layout and other agents in `~/.openclaw/workspace/{agentId}/`.
     var workspaceRoot: String {
         if !workspacePath.isEmpty { return workspacePath }
+        if agentId == AppConstants.defaultAgentId { return "~/.openclaw/workspace/" }
         return "~/.openclaw/workspace/\(agentId)/"
     }
 
@@ -28,7 +30,7 @@ struct GatewayAccount: Codable, Identifiable, Sendable {
     var sessionKeyCronPrefix: String { "agent:\(agentId):cron:" }
     var sessionKeySubagentPrefix: String { "agent:\(agentId):subagent:" }
 
-    init(name: String, url: String, agentId: String = "orchestrator", workspacePath: String = "") {
+    init(name: String, url: String, agentId: String = AppConstants.defaultAgentId, workspacePath: String = "") {
         self.id = UUID().uuidString
         self.name = name
         self.url = url
@@ -41,7 +43,7 @@ struct GatewayAccount: Codable, Identifiable, Sendable {
         id = try c.decode(String.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
         url = try c.decode(String.self, forKey: .url)
-        agentId = try c.decodeIfPresent(String.self, forKey: .agentId) ?? "orchestrator"
+        agentId = try c.decodeIfPresent(String.self, forKey: .agentId) ?? AppConstants.defaultAgentId
         workspacePath = try c.decodeIfPresent(String.self, forKey: .workspacePath) ?? ""
     }
 
@@ -72,7 +74,7 @@ final class AccountStore {
 
     // MARK: - Add
 
-    func add(name: String, url: String, token: String, agentId: String = "orchestrator", workspacePath: String = "") throws {
+    func add(name: String, url: String, token: String, agentId: String = AppConstants.defaultAgentId, workspacePath: String = "") throws {
         var cleanURL = url.trimmingCharacters(in: .whitespaces)
         if cleanURL.hasSuffix("/") { cleanURL = String(cleanURL.dropLast()) }
         if !cleanURL.hasPrefix("http") { cleanURL = "https://\(cleanURL)" }
@@ -103,7 +105,7 @@ final class AccountStore {
         var account = accounts[idx]
         account.name = name.trimmingCharacters(in: .whitespaces)
         account.url = cleanURL
-        account.agentId = agentId.trimmingCharacters(in: .whitespaces).isEmpty ? "orchestrator" : agentId.trimmingCharacters(in: .whitespaces)
+        account.agentId = agentId.trimmingCharacters(in: .whitespaces).isEmpty ? AppConstants.defaultAgentId : agentId.trimmingCharacters(in: .whitespaces)
         account.workspacePath = cleanWS
         accounts[idx] = account
         save()

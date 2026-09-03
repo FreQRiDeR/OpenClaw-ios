@@ -20,14 +20,14 @@ struct AddAccountView: View {
         // so it can't be pre-filled when editing. Leaving it empty keeps the
         // existing token on save (see AccountStore.update).
         _tokenInput = State(initialValue: "")
-        _agentIdInput = State(initialValue: editingAccount?.agentId ?? "orchestrator")
+        _agentIdInput = State(initialValue: editingAccount?.agentId ?? AppConstants.defaultAgentId)
         _workspacePathInput = State(initialValue: editingAccount?.workspacePath ?? "")
     }
 
     @State private var nameInput = ""
     @State private var urlInput = ""
     @State private var tokenInput = ""
-    @State private var agentIdInput = "orchestrator"
+    @State private var agentIdInput = AppConstants.defaultAgentId
     @State private var workspacePathInput = ""
     @State private var errorMessage: String?
     @State private var isSaving = false
@@ -113,13 +113,16 @@ struct AddAccountView: View {
                 Text("AGENT ID")
                     .font(AppTypography.micro)
                     .foregroundStyle(AppColors.neutral)
-                TextField("orchestrator", text: $agentIdInput)
+                TextField(AppConstants.defaultAgentId, text: $agentIdInput)
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
                     .autocorrectionDisabled()
                     .padding(Spacing.sm)
                     .background(AppColors.neutral.opacity(0.1), in: RoundedRectangle(cornerRadius: AppRadius.md))
+                Text("Must match the server's agent (`openclaw agents list` → \"(default)\"). Wrong ID = empty chat history.")
+                    .font(AppTypography.nano)
+                    .foregroundStyle(AppColors.neutral)
             }
             // Workspace path (optional override)
             VStack(alignment: .leading, spacing: Spacing.xxs) {
@@ -191,7 +194,7 @@ struct AddAccountView: View {
                     name: finalName,
                     url: urlInput,
                     token: tokenInput,
-                    agentId: agent.isEmpty ? "orchestrator" : agent,
+                    agentId: agent.isEmpty ? AppConstants.defaultAgentId : agent,
                     workspacePath: workspacePathInput
                 )
             } else {
@@ -199,7 +202,7 @@ struct AddAccountView: View {
                     name: finalName,
                     url: urlInput,
                     token: tokenInput,
-                    agentId: agent.isEmpty ? "orchestrator" : agent,
+                    agentId: agent.isEmpty ? AppConstants.defaultAgentId : agent,
                     workspacePath: workspacePathInput
                 )
             }
