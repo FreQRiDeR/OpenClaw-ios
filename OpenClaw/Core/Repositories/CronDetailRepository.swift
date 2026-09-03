@@ -23,7 +23,7 @@ final class RemoteCronDetailRepository: CronDetailRepository {
 
     func fetchRuns(jobId: String, limit: Int, offset: Int) async throws -> CronRunsPage {
         let body = CronRunsToolRequest(args: .init(jobId: jobId, limit: limit, offset: offset))
-        let response: CronRunsResponseDTO = try await client.invoke(body)
+        let response: CronRunsResponseDTO = try await client.invokeCron(body)
         let runs = response.entries.map(CronRun.init)
         return CronRunsPage(runs: runs, hasMore: runs.count >= limit, total: response.total)
     }
@@ -37,12 +37,12 @@ final class RemoteCronDetailRepository: CronDetailRepository {
 
     func triggerRun(jobId: String) async throws {
         let body = CronJobToolRequest(args: .init(action: "run", jobId: jobId))
-        let _: OkResponse = try await client.invoke(body)
+        let _: OkResponse = try await client.invokeCron(body)
     }
 
     func setEnabled(jobId: String, enabled: Bool) async throws {
         let body = CronUpdateToolRequest(args: .init(jobId: jobId, patch: .init(enabled: enabled)))
-        let _: OkResponse = try await client.invoke(body)
+        let _: OkResponse = try await client.invokeCron(body)
     }
 }
 

@@ -8,20 +8,41 @@ import http.server
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 
 PORT = int(os.environ.get('STATS_SERVER_PORT', '8765'))
 TOKEN = os.environ.get('OPENCLAW_GATEWAY_TOKEN', '')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IS_WIN = sys.platform.startswith('win')
+# Use the interpreter running this server for child scripts — Windows usually has
+# `python` but not `python3`, and this also survives venvs.
+PY = f'"{sys.executable}"'
+
+
+def sh(cmd, timeout=15):
+    """Run a shell command (openclaw is an npm .cmd shim on Windows, so shell=True is
+    required there). stderr is discarded via DEVNULL instead of `2>/dev/null`, which
+    is not valid in cmd.exe."""
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                          stderr=subprocess.DEVNULL, timeout=timeout)
+
+
+def is_within(base, path):
+    """Path-traversal guard that works with / and \\ separators and drive letters."""
+    base = os.path.realpath(base)
+    path = os.path.realpath(path)
+    try:
+        return os.path.commonpath([base, path]) == base and path != base
+    except ValueError:  # different drives on Windows
+        return False
+
 
 # Workspace root — auto-detected from openclaw config, falls back to ~/.openclaw/workspace
 def resolve_workspace():
     try:
-        proc = subprocess.run(
-            'openclaw config get agents.defaults.workspace 2>/dev/null',
-            shell=True, capture_output=True, text=True, timeout=10
-        )
+        proc = sh('openclaw config get agents.defaults.workspace', timeout=10)
         out = proc.stdout.strip().strip('"')
         if out and out not in ('null', '') and os.path.isdir(out):
             return out
@@ -46,10 +67,10 @@ SKILLS_BASE = os.path.join(WORKSPACE, 'skills')
 MEMORY_BASE = os.path.join(WORKSPACE, 'memory')
 
 SCRIPTS = {
-    # {base} is replaced at runtime with BASE_DIR,
-    '/stats/system':   'python3 {base}/system_stats.py',
-    '/stats/outreach': 'python3 {base}/outreach_stats.py',
-    '/stats/blog':     'python3 {base}/blog_stats.py',
+    # {base} is replaced at runtime with BASE_DIR, {py} with the current interpreter
+    '/stats/system':   '{py} "{base}/system_stats.py"',
+    '/stats/outreach': '{py} "{base}/outreach_stats.py"',
+    '/stats/blog':     '{py} "{base}/blog_stats.py"',
     '/stats/tokens':   None,  # handled separately — needs query param
 }
 
@@ -66,7 +87,7 @@ _lock = threading.Lock()
 
 for k,v in list(SCRIPTS.items()):
     if isinstance(v, str):
-        SCRIPTS[k] = v.format(base=BASE_DIR)
+        SCRIPTS[k] = v.format(base=BASE_DIR, py=PY)
 
 def run_script(cache_key, cmd):
     with _lock:
@@ -100,12 +121,13 @@ EXEC_ALLOWLIST = {
     'memory-reindex':  'openclaw memory index --force',
     'session-cleanup': 'openclaw sessions cleanup --enforce',
     'plugin-update':   'openclaw plugins update --all',
-    'restart-stats':   'bash {base}/ensure_stats_server.sh --force',
+    'restart-stats':   ('powershell -NoProfile -ExecutionPolicy Bypass -File "{base}/ensure_stats_server.ps1" -Force'
+                        if IS_WIN else 'bash "{base}/ensure_stats_server.sh" --force'),
     'models-status':   'openclaw models status --json',
     'agents-list':     'openclaw agents list --json',
     'channels-list':   'openclaw channels list --json',
     # NOTE: literal braces must be doubled — these strings go through .format(base=...)
-    'mcp-list':        'openclaw mcp list --json 2>/dev/null || echo "{{}}"',
+    'mcp-list':        'openclaw mcp list --json || echo {{}}',
 }
 
 
@@ -155,7 +177,7 @@ def read_workspace_file(rel_path):
         return None, 'Invalid path'
     base = os.path.realpath(WORKSPACE)
     full = os.path.realpath(os.path.join(base, rel_path))
-    if not full.startswith(base + '/'):
+    if not is_within(base, full):
         return None, 'Path traversal not allowed'
     if not os.path.isfile(full):
         return None, f'File not found: {rel_path}'
@@ -300,7 +322,7 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 # Build and resolve full path — blocks traversal
                 base = _os.path.realpath(SKILLS_BASE)
                 full_path = _os.path.realpath(_os.path.join(base, skill_name, rel_path))
-                if not full_path.startswith(base + '/'):
+                if not is_within(base, full_path):
                     self.send_json(403, {'error': 'Path traversal not allowed'})
                     return
                 if not _os.path.isfile(full_path):
@@ -334,7 +356,7 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 skill_dir = _os.path.join(SKILLS_BASE, skill_name)
                 # Resolve to catch any symlink traversal
                 skill_dir = _os.path.realpath(skill_dir)
-                if not skill_dir.startswith(_os.path.realpath(SKILLS_BASE) + '/'):
+                if not is_within(SKILLS_BASE, skill_dir):
                     self.send_json(403, {'error': 'Path traversal not allowed'})
                     return
                 if not _os.path.isdir(skill_dir):
@@ -397,19 +419,13 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 ]
                 # Read MCP servers and tool config via openclaw CLI (avoids JSON5 parsing)
                 try:
-                    mcp_proc = subprocess.run(
-                        'openclaw mcp list --json', shell=True,
-                        capture_output=True, text=True, timeout=15
-                    )
+                    mcp_proc = sh('openclaw mcp list --json')
                     mcp_cfg = json.loads(mcp_proc.stdout) if mcp_proc.stdout.strip() else {}
                     mcp_servers = list(mcp_cfg.keys())
                 except Exception:
                     mcp_servers = []
                 try:
-                    cv_proc = subprocess.run(
-                        'openclaw config validate --json 2>/dev/null', shell=True,
-                        capture_output=True, text=True, timeout=15
-                    )
+                    cv_proc = sh('openclaw config validate --json')
                     cv = json.loads(cv_proc.stdout) if cv_proc.stdout.strip() else {}
                     tools_cfg = cv.get('config', {}).get('tools', {})
                     profile = tools_cfg.get('profile', 'full')
@@ -444,10 +460,7 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
                 import os as _os
                 t0_mcp = time.time()
                 try:
-                    mcp_proc = subprocess.run(
-                        'openclaw mcp list --json', shell=True,
-                        capture_output=True, text=True, timeout=15
-                    )
+                    mcp_proc = sh('openclaw mcp list --json')
                     mcp_servers = json.loads(mcp_proc.stdout) if mcp_proc.stdout.strip() else {}
                 except Exception as e:
                     self.send_json(500, {'error': f'Failed to read MCP config: {e}'})
@@ -590,7 +603,7 @@ class StatsHandler(http.server.BaseHTTPRequestHandler):
             if period not in ('today', 'yesterday', 'week'):
                 period = 'today'
             cache_key = f'/stats/tokens?period={period}'
-            cmd = f'python3 {BASE_DIR}/token_stats.py {period}'
+            cmd = f'{PY} "{BASE_DIR}/token_stats.py" {period}'
             data, _ = run_script(cache_key, cmd)
             self.send_json(200, data)
             return

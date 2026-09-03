@@ -1,7 +1,45 @@
 import Foundation
 
-struct CronToolRequest: Encodable, Sendable {
-    let tool: String
+// MARK: - Cron / Automations tool name
+
+/// OpenClaw renamed the scheduler CLI from `cron` to `automations` (with `cron` kept as an
+/// alias). The *gateway tool* name may follow. We try the remembered name first and, on a
+/// `not_found` tool error, flip to the other spelling and retry once — so one build works
+/// against both old and new gateways.
+actor CronToolName {
+    static let shared = CronToolName()
+    static let candidates = ["cron", "automations"]
+    private(set) var current = candidates[0]
+
+    func alternate() -> String {
+        current = Self.candidates.first { $0 != current } ?? current
+        return current
+    }
+}
+
+/// A `/tools/invoke` body whose tool name can be swapped between `cron` and `automations`.
+protocol CronToolBody: Encodable, Sendable {
+    func withTool(_ name: String) -> Self
+}
+
+extension GatewayClientProtocol {
+    /// Invoke a cron/automations tool, transparently retrying with the other tool name if the
+    /// gateway reports the current one as unknown.
+    func invokeCron<Body: CronToolBody, Response: Decodable>(_ body: Body) async throws -> Response {
+        let name = await CronToolName.shared.current
+        do {
+            return try await invoke(body.withTool(name))
+        } catch GatewayError.serverError(_, let type, _) where type == "not_found" {
+            let other = await CronToolName.shared.alternate()
+            return try await invoke(body.withTool(other))
+        }
+    }
+}
+
+// MARK: - Request bodies
+
+struct CronToolRequest: CronToolBody {
+    var tool = CronToolName.candidates[0]
     let args: Input
 
     struct Input: Encodable, Sendable {
@@ -10,23 +48,26 @@ struct CronToolRequest: Encodable, Sendable {
     }
 
     init(args: Input) {
-        self.tool = "cron"
         self.args = args
     }
+
+    func withTool(_ name: String) -> Self { var c = self; c.tool = name; return c }
 }
 
-struct CronJobToolRequest: Encodable, Sendable {
-    let tool = "cron"
+struct CronJobToolRequest: CronToolBody {
+    var tool = CronToolName.candidates[0]
     let args: Args
 
     struct Args: Encodable, Sendable {
         let action: String
         let jobId: String
     }
+
+    func withTool(_ name: String) -> Self { var c = self; c.tool = name; return c }
 }
 
-struct CronRunsToolRequest: Encodable, Sendable {
-    let tool = "cron"
+struct CronRunsToolRequest: CronToolBody {
+    var tool = CronToolName.candidates[0]
     let args: Args
 
     struct Args: Encodable, Sendable {
@@ -35,11 +76,15 @@ struct CronRunsToolRequest: Encodable, Sendable {
         let limit: Int
         let offset: Int
     }
+
+    func withTool(_ name: String) -> Self { var c = self; c.tool = name; return c }
 }
 
-struct CronUpdateToolRequest: Encodable, Sendable {
-    let tool = "cron"
+struct CronUpdateToolRequest: CronToolBody {
+    var tool = CronToolName.candidates[0]
     let args: Args
+
+    func withTool(_ name: String) -> Self { var c = self; c.tool = name; return c }
 
     struct Args: Encodable, Sendable {
         let action = "update"

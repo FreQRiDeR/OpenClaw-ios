@@ -56,10 +56,11 @@ HOST=$(echo "$STATUS" | grep -oE 'https://[^ ]+' | head -1)
 echo "== 3. End-to-end through $HOST"
 probe() { # $1=label $2=method $3=path $4=body $5=expect-substring
   local out code
+  # 60s: exec commands shell out to the openclaw CLI, which can take 20s+ (e.g. `mcp list`)
   if [ "$2" = GET ]; then
-    out=$(curl -s -m 20 -w '\n%{http_code}' -H "Authorization: Bearer $TOKEN" "$HOST$3")
+    out=$(curl -s -m 60 -w '\n%{http_code}' -H "Authorization: Bearer $TOKEN" "$HOST$3")
   else
-    out=$(curl -s -m 20 -w '\n%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$4" "$HOST$3")
+    out=$(curl -s -m 60 -w '\n%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$4" "$HOST$3")
   fi
   code=${out##*$'\n'}; body=${out%$'\n'*}
   if [ "$code" = 200 ] && printf '%s' "$body" | grep -q "$5"; then ok "$1"; else

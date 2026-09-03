@@ -15,7 +15,7 @@ final class RemoteCronRepository: CronRepository {
     func fetchJobs() async throws -> [CronJob] {
         if let cached = await cache.get() { return cached }
         let body = CronToolRequest(args: .init(action: "list", includeDisabled: true))
-        let response: CronJobListResponseDTO = try await client.invoke(body)
+        let response: CronJobListResponseDTO = try await client.invokeCron(body)
         let jobs = response.jobs.map(CronJob.init)
         await cache.set(jobs)
         return jobs
