@@ -125,7 +125,7 @@ Or from a clone of this repo: `bash install.sh` / `powershell -ExecutionPolicy B
 It will:
 1. check prerequisites (`openclaw`, `python3`, `tailscale`) and read the gateway token from `~/.openclaw/openclaw.json`
 2. warn about any gateway config the app needs (see step 2) — it never edits your config
-3. install to `~/.openclaw/openclaw-stats-server` (from the repo, the bundled `docs/openclaw-stats-server.zip`, or a download)
+3. install to `~/.openclaw/openclaw-stats-server` — source is, in order: a repo checkout next to the script, `openclaw-stats-server.zip` next to the script (in `docs/` or loose), or a download from GitHub. It refuses to install a zip that predates cross-platform support.
 4. start the server and confirm `/stats/health` answers with your token
 5. configure `tailscale serve` so `/` → gateway and `/stats` → stats server, then probe every endpoint the app uses
 6. print the exact **Gateway URL** and **Agent ID** to type into the app
@@ -171,6 +171,13 @@ The installer checks these for you and warns if anything is missing. Add to `ope
     "allow": ["exec", "cron", "gateway", "sessions_list", "sessions_history", "memory_get"]
   },
   "gateway": {
+    "bind": "loopback",
+    "trustedProxies": ["127.0.0.1"],
+    "auth": {
+      "mode": "token",
+      "allowTailscale": false
+    },
+    "tailscale": { "mode": "off" },
     "http": {
       "endpoints": {
         "chatCompletions": { "enabled": true }
@@ -178,6 +185,14 @@ The installer checks these for you and warns if anything is missing. Add to `ope
     }
   }
 }
+```
+
+`trustedProxies` is intentionally restricted to `127.0.0.1`: our external `tailscale serve --bg` targets use that address as the immediate proxy hop. Keep bearer-token auth enabled and OpenClaw's own Tailscale integration off so there is one owner of port 443. Without this, OpenClaw 8.x rejects proxied gateway requests with HTTP 403 `proxy_attribution_required`.
+
+On Windows, avoid passing JSON arrays through the native CLI—Windows PowerShell can strip the inner quotes and save an invalid string. Use the packaged helper instead; it creates a timestamped backup, writes a real array, validates with OpenClaw and restores the backup on failure:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$HOME\.openclaw\openclaw-stats-server\scripts\configure_gateway_proxy.ps1"
 ```
 
 ### 3. Build and run the app

@@ -7,7 +7,8 @@
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File setup_tailscale.ps1            # configure + verify
 #         powershell -ExecutionPolicy Bypass -File setup_tailscale.ps1 -Verify    # verify only
-param([switch]$Verify)
+#         Add -Pause when launching by double-click so the window stays open.
+param([switch]$Verify, [switch]$Pause)
 $ErrorActionPreference = 'Continue'
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -24,13 +25,29 @@ $TS = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
 if (-not $TS) { foreach ($c in @("$env:ProgramFiles\Tailscale\tailscale.exe", "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe")) { if (Test-Path $c) { $TS = $c; break } } }
 if (-not $TS) { Write-Error 'tailscale CLI not found'; exit 1 }
 
-# --- token (from file; `openclaw config get` may return __OPENCLAW_REDACTED__)
+# --- config + token (`openclaw config get` may return __OPENCLAW_REDACTED__)
+$cfg = $null
+try { $cfg = Get-Content (Join-Path $HOME '.openclaw\openclaw.json') -Raw | ConvertFrom-Json } catch { }
 $Token = $env:OPENCLAW_GATEWAY_TOKEN
 if (-not $Token -or $Token -eq '__OPENCLAW_REDACTED__') {
-    try { $Token = (Get-Content (Join-Path $HOME '.openclaw\openclaw.json') -Raw | ConvertFrom-Json).gateway.auth.token } catch { $Token = $null }
+    $Token = $cfg.gateway.auth.token
 }
 if (-not $Token) { Write-Error 'Could not read gateway token from ~\.openclaw\openclaw.json'; exit 1 }
 $env:OPENCLAW_GATEWAY_TOKEN = $Token
+# OpenClaw 8.x requires explicit attribution for requests arriving through an
+# externally-managed reverse proxy. Tailscale Serve is local, so trust only the
+# immediate IPv4 loopback hop; keep bearer-token auth enabled.
+$trusted = @($cfg.gateway.trustedProxies)
+$proxyConfigOK = ($trusted -contains '127.0.0.1') -and
+                 ($cfg.gateway.auth.mode -eq 'token') -and
+                 ($cfg.gateway.auth.allowTailscale -eq $false) -and
+                 ($cfg.gateway.tailscale.mode -eq 'off')
+if (-not $proxyConfigOK) {
+    Write-Host "`n== Gateway proxy preflight" -ForegroundColor Yellow
+    Bad 'OpenClaw gateway is not configured for the external Tailscale proxy.'
+    Write-Host '  Run the safe config helper (backs up, writes a real array, validates, restarts):' -ForegroundColor Yellow
+    Write-Host "    powershell -ExecutionPolicy Bypass -File `"$ScriptDir\configure_gateway_proxy.ps1`"
+}
 
 function Test-Listening($port) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
@@ -49,16 +66,45 @@ if (-not (Test-Listening $StatsPort)) {
 if (Test-Listening $StatsPort) { Ok "stats server listening on :$StatsPort" }
 
 Step '2. Tailscale serve routing'
+$script:ServeConflict = $false
+function Set-ServePath($path, $target) {
+    # Use --set-path=<value>; this avoids native-argument ambiguity in Windows PowerShell.
+    $pathArg = "--set-path=$path"
+    $out = (& $TS serve --bg $pathArg $target 2>&1) -join "`n"
+    $code = $LASTEXITCODE
+    if ($code -eq 0) {
+        Ok "$path -> $target"
+    } else {
+        Bad "tailscale serve $path failed (exit $code)"
+        if ($out) { $out -split "`n" | ForEach-Object { Write-Host "      $_" -ForegroundColor Yellow } }
+        if ($out -match 'foreground listener already exists') {
+            $script:ServeConflict = $true
+            Write-Host '      A previous foreground `tailscale serve` process owns HTTPS port 443.' -ForegroundColor Yellow
+            Write-Host '      List it: Get-CimInstance Win32_Process | ? { $_.CommandLine -match "tailscale(.exe)? serve" } | select ProcessId,CommandLine' -ForegroundColor Yellow
+            Write-Host '      Stop that specific PID, then rerun this script. It will not kill it automatically.' -ForegroundColor Yellow
+        }
+    }
+}
 if (-not $Verify) {
-    & $TS serve --bg --set-path /      "http://127.0.0.1:$GatewayPort"          2>&1 | Out-Null
-    & $TS serve --bg --set-path /stats "http://127.0.0.1:$StatsPort/stats"      2>&1 | Out-Null
-    & $TS serve --bg --set-path /wa    "http://127.0.0.1:$StatsPort/wa"         2>&1 | Out-Null
+    Set-ServePath '/' "http://127.0.0.1:$GatewayPort"
+    # One port conflict affects every path; don't print the same failure three times.
+    if (-not $script:ServeConflict) { Set-ServePath '/stats' "http://127.0.0.1:$StatsPort/stats" }
+    if (-not $script:ServeConflict) { Set-ServePath '/wa' "http://127.0.0.1:$StatsPort/wa" }
 }
 $Status = (& $TS serve status 2>&1) -join "`n"
+$StatusCode = $LASTEXITCODE
 if ($Status -match "(?m)^\|-- /\s+proxy http://127\.0\.0\.1:$GatewayPort") { Ok "/       -> :$GatewayPort" } else { Bad "/ is not proxied to :$GatewayPort" }
 if ($Status -match "(?m)^\|-- /stats\s+proxy http://127\.0\.0\.1:$StatsPort") { Ok "/stats  -> :$StatsPort" } else { Bad "/stats is not proxied to :$StatsPort" }
 $Host_ = if ($Status -match 'https://[^\s]+') { $Matches[0] } else { $null }
-if (-not $Host_) { Bad 'tailscale serve is not enabled'; exit 1 }
+if (-not $Host_) {
+    Bad "tailscale serve is not enabled (status exit $StatusCode)"
+    if ($Status) {
+        Write-Host '  tailscale serve status said:' -ForegroundColor Yellow
+        $Status -split "`n" | ForEach-Object { Write-Host "      $_" -ForegroundColor Yellow }
+    }
+    if ($Pause) { Read-Host 'Press Enter to close' | Out-Null }
+    exit 1
+}
 
 Step "3. End-to-end through $Host_"
 function Probe($label, $method, $path, $body, $expect) {
@@ -115,8 +161,10 @@ if ($Agent) {
 Write-Host ''
 if (-not $script:Fail) {
     Write-Host "All good. In the iOS app use:  Gateway URL = $Host_   Agent ID = $(if ($Agent) { $Agent } else { 'main' })"
+    if ($Pause) { Read-Host 'Press Enter to close' | Out-Null }
     exit 0
 } else {
     Write-Host 'Some checks failed - see [FAIL] lines above.'
+    if ($Pause) { Read-Host 'Press Enter to close' | Out-Null }
     exit 1
 }

@@ -17,7 +17,9 @@
 # Env overrides: OPENCLAW_GATEWAY_PORT (18789), STATS_SERVER_PORT (8765)
 set -u
 
-REPO_RAW="https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/main"
+# Branch to download from when no local copy is found (override: OPENCLAW_IOS_BRANCH=main)
+REPO_BRANCH="${OPENCLAW_IOS_BRANCH:-Windows_Server}"
+REPO_RAW="https://raw.githubusercontent.com/FreQRiDeR/OpenClaw-ios/$REPO_BRANCH"
 DEST="${HOME}/.openclaw/openclaw-stats-server"
 DO_TAILSCALE=1
 FORCE=0
@@ -81,6 +83,19 @@ if c.get("tools",{}).get("sessions",{}).get("visibility") == "all":
     ok("tools.sessions.visibility = all")
 else:
     warn('Sessions tab will be empty: set tools.sessions.visibility = "all"')
+g = c.get("gateway", {})
+trusted = g.get("trustedProxies", [])
+if "127.0.0.1" in trusted:
+    ok("gateway.trustedProxies narrowly trusts the IPv4 loopback proxy")
+else:
+    warn('External Tailscale proxy needs gateway.trustedProxies = ["127.0.0.1"] (otherwise HTTP 403 proxy attribution)')
+auth = g.get("auth", {})
+if auth.get("mode") == "token": ok("gateway.auth.mode = token")
+else: warn("Keep bearer token auth enabled: gateway.auth.mode = token")
+if auth.get("allowTailscale") is False: ok("gateway.auth.allowTailscale = false")
+else: warn("External Serve should use the bearer token: gateway.auth.allowTailscale = false")
+if g.get("tailscale", {}).get("mode") == "off": ok("gateway.tailscale.mode = off (external Serve is sole owner)")
+else: warn("External Serve must be the sole owner: gateway.tailscale.mode = off")
 need = ["exec","cron","gateway","sessions_list","sessions_history","memory_get"]
 allow = c.get("tools",{}).get("allow")
 profile = c.get("tools",{}).get("profile")
@@ -94,16 +109,25 @@ PY
 
 # ---------------------------------------------------------------------------
 step "3. Locate stats server files"
+# Priority: repo checkout next to script -> zip next to script (docs/ or loose) -> download.
+# The install destination is never used as a source (it is deleted before copying).
 SRC_DIR=""; SRC_ZIP=""; TMPDIR_DL=""
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/openclaw-stats-server/scripts/dashboard/stats_server.py" ]; then
-  SRC_DIR="$SCRIPT_DIR/openclaw-stats-server"; ok "using repo checkout: $SRC_DIR"
-elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/docs/openclaw-stats-server.zip" ]; then
-  SRC_ZIP="$SCRIPT_DIR/docs/openclaw-stats-server.zip"; ok "using bundled zip: $SRC_ZIP"
-else
+abs() { (cd "$1" 2>/dev/null && pwd -P); }
+if [ -n "$SCRIPT_DIR" ]; then
+  CAND="$SCRIPT_DIR/openclaw-stats-server"
+  if [ -f "$CAND/scripts/dashboard/stats_server.py" ] && [ "$(abs "$CAND")" != "$(abs "$DEST")" ]; then
+    SRC_DIR="$CAND"; ok "using repo checkout: $SRC_DIR"
+  else
+    for z in "$SCRIPT_DIR/docs/openclaw-stats-server.zip" "$SCRIPT_DIR/openclaw-stats-server.zip"; do
+      if [ -f "$z" ]; then SRC_ZIP="$z"; ok "using local zip: $SRC_ZIP"; break; fi
+    done
+  fi
+fi
+if [ -z "$SRC_DIR" ] && [ -z "$SRC_ZIP" ]; then
   TMPDIR_DL=$(mktemp -d); SRC_ZIP="$TMPDIR_DL/openclaw-stats-server.zip"
-  echo "  downloading $REPO_RAW/docs/openclaw-stats-server.zip …"
+  echo "  no local copy found — downloading $REPO_RAW/docs/openclaw-stats-server.zip …"
   curl -fsSL "$REPO_RAW/docs/openclaw-stats-server.zip" -o "$SRC_ZIP" || die "download failed"
-  ok "downloaded $(du -h "$SRC_ZIP" | awk '{print $1}')"
+  ok "downloaded $(du -h "$SRC_ZIP" | awk '{print $1}') from branch '$REPO_BRANCH'"
 fi
 
 # ---------------------------------------------------------------------------
@@ -139,7 +163,12 @@ find "$DEST" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 chmod +x "$DEST"/scripts/*.sh "$DEST"/scripts/dashboard/*.sh 2>/dev/null
 python3 -m py_compile "$DEST/scripts/dashboard/stats_server.py" || die "stats_server.py failed to compile"
 rm -rf "$DEST/scripts/dashboard/__pycache__"
-ok "installed $(find "$DEST" -type f | wc -l | tr -d ' ') files"
+# Sanity: refuse a copy that predates the cross-platform server (old zip / wrong branch)
+for req in scripts/setup_tailscale.sh scripts/dashboard/ensure_stats_server.sh scripts/setup_tailscale.ps1 scripts/configure_gateway_proxy.ps1; do
+  [ -f "$DEST/$req" ] || { rm -rf "$DEST"; die "installed copy is missing $req — stale zip or wrong branch. Re-zip from the current branch (or set OPENCLAW_IOS_BRANCH)."; }
+done
+grep -q IS_WIN "$DEST/scripts/dashboard/system_stats.py" || { rm -rf "$DEST"; die "system_stats.py predates cross-platform support — stale zip."; }
+ok "installed $(find "$DEST" -type f | wc -l | tr -d ' ') files (cross-platform build verified)"
 
 # ---------------------------------------------------------------------------
 step "5. Start stats server"
